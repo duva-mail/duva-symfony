@@ -1,0 +1,73 @@
+# Publication de `duva-mail/symfony-mailer` (Packagist).
+#
+# Packagist n'a pas de téléversement : il lit le dépôt à l'étiquette Git `vX.Y.Z`. Ce workflow vérifie que la
+# version de CHANGELOG.md est celle de l'étiquette, rejoue les tests sur Symfony 6.4, 7.4 et 8, crée la version GitHub
+# et, SI les secrets `PACKAGIST_USERNAME` et `PACKAGIST_API_TOKEN` existent, demande à Packagist de relire le dépôt
+# (sinon : le crochet GitHub de Packagist, à brancher une fois sur packagist.org > duva-mail/symfony-mailer > Settings).
+#
+# « Run workflow » à la main ne publie JAMAIS sauf si on décoche `dry_run` sur une étiquette.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Contrôler seulement (ne rien publier)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { php: "8.2", symfony: "6.4.*" }
+          - { php: "8.2", symfony: "7.4.*" }
+          - { php: "8.4", symfony: "8.*" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer
+      - name: Le CHANGELOG annonce la version de l'étiquette
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: grep -q "^## ${GITHUB_REF_NAME#v}\$" CHANGELOG.md || { echo "CHANGELOG sans section ${GITHUB_REF_NAME#v}" >&2; exit 1; }
+      - name: Installer sur Symfony ${{ matrix.symfony }}
+        run: |
+          composer require --no-update --no-interaction "symfony/config:${{ matrix.symfony }}" "symfony/dependency-injection:${{ matrix.symfony }}" "symfony/http-kernel:${{ matrix.symfony }}" "symfony/mailer:${{ matrix.symfony }}" "symfony/mime:${{ matrix.symfony }}"
+          composer update --no-interaction --prefer-dist
+      - run: composer test
+      - run: composer stan -- --no-progress
+
+  release:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.dry_run == false)
+    runs-on: ubuntu-latest
+    environment: publication
+    permissions:
+      contents: write # créer la version GitHub
+    steps:
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          generate_release_notes: true
+      - name: Demander à Packagist de relire le dépôt (si les secrets existent)
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+        run: |
+          if [ -z "${PACKAGIST_USERNAME}" ] || [ -z "${PACKAGIST_API_TOKEN}" ]; then
+            echo "Secrets Packagist absents : on compte sur le crochet GitHub de Packagist."
+            exit 0
+          fi
+          curl --fail-with-body -sS -X POST -H "content-type: application/json" \
+            "https://packagist.org/api/update-package?username=${PACKAGIST_USERNAME}&apiToken=${PACKAGIST_API_TOKEN}" \
+            -d "{\"repository\":{\"url\":\"https://github.com/${GITHUB_REPOSITORY}\"}}"

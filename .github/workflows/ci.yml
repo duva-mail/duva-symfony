@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { php: "8.2", symfony: "6.4.*" }
+          - { php: "8.2", symfony: "7.4.*" }
+          - { php: "8.4", symfony: "8.*" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer
+      - name: Installer sur Symfony ${{ matrix.symfony }}
+        run: |
+          composer require --no-update --no-interaction "symfony/config:${{ matrix.symfony }}" "symfony/dependency-injection:${{ matrix.symfony }}" "symfony/http-kernel:${{ matrix.symfony }}" "symfony/mailer:${{ matrix.symfony }}" "symfony/mime:${{ matrix.symfony }}"
+          composer update --no-interaction --prefer-dist
+      - run: composer test
+      - run: composer stan -- --no-progress
